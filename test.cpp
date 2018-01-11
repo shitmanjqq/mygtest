@@ -28,4 +28,5 @@ TEST_F(World, first) {
 
 TEST_F(World, second) {
   std::cout << "World: second test" << std::endl;
+  EXPECT_EQ(1, 2);
 }
