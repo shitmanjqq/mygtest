@@ -15,6 +15,17 @@
 
 namespace testing {
 
+class Test;
+class TestInfo;
+class TestCase;
+class UnitTest;
+
+namespace internal {
+
+class TestEventRepeater;
+
+} // namespace internal
+
 class GTEST_API_ AssertionResult {
  public:
   // ~AssertionResult() { std::cout << *message_ << std::endl; }
@@ -74,9 +85,100 @@ GTEST_API_ AssertionResult AssertionFailure();
 
 namespace internal {
 
+class AssertHelper;
 // class UnitTest* GetUnitTest();
 
 } // namespace internal
+
+class TestEventListener {
+ public:
+  virtual ~TestEventListener() {}
+
+  virtual void OnTestProgramStart(const UnitTest& unit_test) = 0;
+
+  virtual void OnTestIterationStart(const UnitTest& unit_test,
+                                    int iteration) = 0;
+
+  virtual void OnEnvironmentsSetUpStart(const UnitTest& unit_test) = 0;
+
+  virtual void OnEnvironmentsSetUpEnd(const UnitTest& unit_test) = 0;
+
+  virtual void OnTestCaseStart(const TestCase& test_case) = 0;
+
+  virtual void OnTestStart(const TestInfo& test_info) = 0;
+
+  virtual void OnTestPartResult(const TestPartResult& test_part_result) = 0;
+
+  virtual void OnTestEnd(const TestInfo& test_info) = 0;
+
+  virtual void OnTestCaseEnd(const TestCase& test_case) = 0;
+
+  virtual void OnEnvironmentsTearDownStart(const UnitTest& unit_test) = 0;
+
+  virtual void OnEnvironmentsTearDownEnd(const UnitTest& unit_test) = 0;
+
+  virtual void OnTestIterationEnd(const UnitTest& unit_test,
+                                  int iteration) = 0;
+
+  virtual void OnTestProgramEnd(const UnitTest& unit_test) = 0;
+};
+
+class EmptyTestEventListener : public TestEventListener {
+ public:
+  virtual void OnTestProgramStart(const UnitTest& /*unit_test*/) {}
+  virtual void OnTestIterationStart(const UnitTest& /*unit_test*/,
+                                    int /*iteration*/) {}
+  virtual void OnEnvironmentsSetUpStart(const UnitTest& /*unit_test*/) {}
+  virtual void OnEnvironmentsSetUpEnd(const UnitTest& /*unit_test*/) {}
+  virtual void OnTestCaseStart(const TestCase& /*test_case*/) {}
+  virtual void OnTestStart(const TestInfo& /*test_info*/) {}
+  virtual void OnTestPartResult(const TestPartResult& /*test_part_result*/) {}
+  virtual void OnTestEnd(const TestInfo& /*test_info*/) {}
+  virtual void OnTestCaseEnd(const TestCase& /*test_case*/) {}
+  virtual void OnEnvironmentsTearDownStart(const UnitTest& /*unit_test*/) {}
+  virtual void OnEnvironmentsTearDownEnd(const UnitTest& /*unit_test*/) {}
+  virtual void OnTestIterationEnd(const UnitTest& /*unit_test*/,
+                                  int /*iteration*/) {}
+  virtual void OnTestProgramEnd(const UnitTest& /*unit_test*/) {}
+};
+
+class GTEST_API_ TestEventListeners {
+ public:
+  TestEventListeners();
+  ~TestEventListeners();
+
+  void Append(TestEventListener* listener);
+
+  TestEventListener* Release(TestEventListener* listener);
+
+  TestEventListener* default_result_printer() const {
+    return default_result_printer_;
+  }
+
+  TestEventListener* default_xml_generator() const {
+    return default_xml_generator_;
+  }
+
+ private:
+  friend class UnitTest;
+  friend class TestInfo;
+  friend class internal::DefaultGlobalTestPartResultReporter;
+
+  TestEventListener* repeater();
+
+  void SetDefaultResultPrinter(TestEventListener* listener);
+
+  void SetDefaultXmlGenerator(TestEventListener* listener);
+
+  bool EventForwardingEnabled() const;
+  void SuppressEventForwarding();
+
+  internal::TestEventRepeater* repeater_;
+  TestEventListener* default_result_printer_;
+  TestEventListener* default_xml_generator_;
+
+  GTEST_DISALLOW_COPY_AND_ASSIGN_(TestEventListeners);
+};
 
 class GTEST_API_ Test {
  public:
@@ -105,16 +207,36 @@ class GTEST_API_ TestResult {
 
   ~TestResult();
 
+  int total_part_count() const;
+
+  // int test_property_count() const;
+
+  bool Passed() const { return !Failed(); }
+
+  bool Failed() const;
+
+  bool HasFatalFailure() const;
+
+  bool HasNonFatalFailure() const;
+
+  const TestPartResult& GetTestPartResult(int i) const;
+
+  // const
+
  private:
   friend class TestInfo;
   friend class TestCase;
   friend class UnitTest;
+  friend class internal::DefaultGlobalTestPartResultReporter;
 
   void Clear();
 
+  void AddTestPartResult(const TestPartResult& test_part_result);
+
+  std::vector<TestPartResult> test_part_results_;
+
   GTEST_DISALLOW_COPY_AND_ASSIGN_(TestResult);
 };
-
 
 class GTEST_API_ TestInfo {
  public:
@@ -124,17 +246,26 @@ class GTEST_API_ TestInfo {
 
   const char* name() const { return name_.c_str(); }
 
+  const char* file() const { return location_.file.c_str(); }
+
+  int line() const { return location_.line; }
+
+  const TestResult* result() const { return &result_; }
+
  private:
   friend class Test;
   friend class TestCase;
+  friend class UnitTest;
 
   friend TestInfo* internal::MakeAndRegisterTestInfo (
       const char* test_case_name,
       const char* name,
+      internal::CodeLocation code_location,
       internal::TestFactoryBase* factory);
 
   TestInfo(const std::string& test_case_name,
            const std::string& name,
+           internal::CodeLocation a_code_location,
            internal::TestFactoryBase* factory);
 
   void Run();
@@ -145,6 +276,7 @@ class GTEST_API_ TestInfo {
 
   const std::string test_case_name_;
   const std::string name_;
+  internal::CodeLocation location_;
   internal::TestFactoryBase* const factory_;
 
   TestResult result_;
@@ -160,6 +292,22 @@ class GTEST_API_ TestCase {
 
   const char *name() const { return name_.c_str(); }
 
+  int successful_test_count() const;
+
+  int failed_test_count() const;
+
+  int test_to_run_count() const;
+
+  int total_test_count() const;
+
+  bool should_run() const { return true; }
+
+  bool Passed() const { return !Failed(); }
+
+  bool Failed() const { return failed_test_count() > 0; }
+
+  const TestInfo* GetTestInfo(int i) const;
+
  private:
   friend class Test;
   friend class UnitTest;
@@ -172,8 +320,22 @@ class GTEST_API_ TestCase {
 
   void Run();
 
+  static bool TestPassed(const TestInfo* test_info) {
+    return test_info->result()->Passed();
+  }
+
+  static bool TestFailed(const TestInfo* test_info) {
+    return test_info->result()->Failed();
+  }
+
+  static bool ShouldRunTest(const TestInfo* test_info) {
+    // return test_info->should_run();
+    return true;
+  }
+
   const std::string name_;
   std::vector<TestInfo*> test_info_list_;
+  std::vector<int> test_indices_;
   // std::vector<
 
   GTEST_DISALLOW_COPY_AND_ASSIGN_(TestCase);
@@ -185,18 +347,76 @@ class GTEST_API_ UnitTest {
 
   int Run() GTEST_MUST_USE_RESULT_;
 
+  const TestCase* current_test_case() const;
+
+  const TestInfo* current_test_info() const;
+
+  int successful_test_case_count() const;
+
+  int failed_test_case_count() const;
+
+  int total_test_case_count() const;
+
+  int test_case_to_run_count() const;
+
+  int successful_test_count() const;
+
+  int failed_test_count() const;
+
+  int total_test_count() const;
+
+  int test_to_run_count() const;
+
+  bool Passed() const;
+
+  bool Failed() const;
+
+  const TestCase* GetTestCase(int i) const;
+
   TestCase* GetTestCase(const char *test_case_name);
 
   void AddTestInfo(TestInfo* test_info);
 
+  TestEventListeners& listeners() { return listeners_; }
+
+  void set_current_test_info(TestInfo* a_current_test_info) {
+    current_test_info_ = a_current_test_info;
+  }
+
+  TestResult* current_test_result();
+
+  TestPartResultReporterInterface* GetGlobalTestPartResultReporter();
+
+  TestPartResultReporterInterface* GetTestPartResultReporterForCurrentThread();
+
  private:
   friend class Test;
+  friend class internal::AssertHelper;
+
+  void AddTestPartResult(TestPartResult::Type result_type,
+                         const char* file_name,
+                         int line_num,
+                         const std::string& message);
 
   UnitTest();
 
   virtual ~UnitTest();
 
+  internal::DefaultGlobalTestPartResultReporter default_global_test_part_result_reporter_;
+  TestPartResultReporterInterface* global_test_part_result_reporter_;
+  internal::DefaultPerThreadTestPartResultReporter
+      default_per_thread_test_part_result_reporter_;
+  internal::ThreadLocal<TestPartResultReporterInterface*>
+      per_thread_test_part_result_reporter_;
   std::vector<TestCase*> test_cases_;
+  std::vector<int> test_case_indices_;
+  TestEventListeners listeners_;
+
+  TestCase* current_test_case_;
+  TestInfo* current_test_info_;
+  // Te
+  mutable internal::Mutex mutex_;
+  internal::Mutex global_test_part_result_reporter_mutex_;
 
   GTEST_DISALLOW_COPY_AND_ASSIGN_(UnitTest);
 };
@@ -393,6 +613,7 @@ class GTEST_API_ GTEST_TEST_CLASS_NAME_(test_case, test_name) : public parent {\
 testing::TestInfo* GTEST_TEST_CLASS_NAME_(test_case, test_name)\
   ::test_info_ = testing::internal::MakeAndRegisterTestInfo(\
       #test_case, #test_name,\
+      ::testing::internal::CodeLocation(__FILE__, __LINE__), \
       new testing::internal::TestFactoryImpl<\
           GTEST_TEST_CLASS_NAME_(test_case, test_name)>);\
 \

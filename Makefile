@@ -1,11 +1,13 @@
 CXX = g++
 INCLUDEFLAGS=
 
-ExecFile = gtest_main.cpp 
-           # test.cpp
+ExecFile = gtest_main.cpp \
+           test.cpp
 
 SrcFiles = gtest.cpp \
-           gtest_internal.cpp
+           gtest_internal.cpp \
+           gtest_port.cpp \
+           gtest_test_part.cpp
 
 IncludeFile = gtest.h \
               gtest_def.h \
@@ -34,7 +36,7 @@ $(Lib) : ${OBJ}
 	$(CXX) -shared $^ -o $@ 
 
 a.out : $(Lib) $(ExecFile)
-	$(CXX) -fPIC $(CFLAGS) -L./ -Wl,-rpath=./ -o $@ $(ExecFile) $<
+	$(CXX) -fPIC $(CFLAGS) -L./ -Wl,-rpath=./ -o $@ $(ExecFile) $< -lpthread
 
 
 %.d:%.cpp
