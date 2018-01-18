@@ -3,10 +3,11 @@
 #include <string>
 #include <stdarg.h>
 
-#include "gtest.h"
-#include "gtest_message.h"
-#include "gtest_string.h"
-#include "gtest_port.h"
+// #include "gtest.h"
+#include "gtest_internal_impl.h"
+// #include "gtest_message.h"
+// #include "gtest_string.h"
+// #include "gtest_port.h"
 
 // TODO
 
@@ -484,17 +485,17 @@ void PrettyUnitTestResultPrinter::OnTestIterationEnd(const UnitTest& unit_test,
 
 DefaultGlobalTestPartResultReporter::
   DefaultGlobalTestPartResultReporter(
-    UnitTest* unit_test) : unit_test_(unit_test) {}
+    UnitTestImpl* unit_test) : unit_test_(unit_test) {}
 
 void DefaultGlobalTestPartResultReporter::ReportTestPartResult(
     const TestPartResult& result) {
   unit_test_->current_test_result()->AddTestPartResult(result);
-  unit_test_->listeners().repeater()->OnTestPartResult(result);
+  unit_test_->listeners()->repeater()->OnTestPartResult(result);
 }
 
 DefaultPerThreadTestPartResultReporter::
   DefaultPerThreadTestPartResultReporter(
-    UnitTest* unit_test) : unit_test_(unit_test) {}
+    UnitTestImpl* unit_test) : unit_test_(unit_test) {}
 
 void DefaultPerThreadTestPartResultReporter::ReportTestPartResult(
     const TestPartResult& result) {
@@ -503,23 +504,33 @@ void DefaultPerThreadTestPartResultReporter::ReportTestPartResult(
 
 } // namespace internal
 
-Test::Test() {
-}
 
-Test::~Test() {
-}
-
-void Test::Run() {
-  TestBody();
-}
-
+/************************************************
+ * TestResult
+ * member function implentation
+ ************************************************/
 TestResult::TestResult() {
 }
 
 TestResult::~TestResult() {
 }
 
+const TestPartResult& TestResult::GetTestPartResult(int i) const {
+  if (i < 0 || i >= total_part_count())
+    internal::posix::Abort();
+  return test_part_results_.at(i);
+}
+
+void TestResult::ClearTestPartResults() {
+  test_part_results_.clear();
+}
+
+void TestResult::AddTestPartResult(const TestPartResult& test_part_result) {
+  test_part_results_.push_back(test_part_result);
+}
+
 void TestResult::Clear() {
+  test_part_results_.clear();
 }
 
 bool TestResult::Failed() const {
@@ -530,20 +541,64 @@ bool TestResult::Failed() const {
   return false;
 }
 
-const TestPartResult& TestResult::GetTestPartResult(int i) const {
-  if (i < 0 || i >= total_part_count())
-    internal::posix::Abort();
-  return test_part_results_.at(i);
+static bool TestPartFatallyFailed(const TestPartResult& result) {
+  return result.fatally_failed();
+}
+
+bool TestResult::HasFatalFailure() const {
+  return CountIf(test_part_results_, TestPartFatallyFailed) > 0;
+}
+
+static bool TestPartNonfatallyFailed(const TestPartResult& result) {
+  return result.nonfatally_failed();
+}
+
+bool TestResult::HasNonfatalFalure() const {
+  return CountIf(test_part_results_, TestPartNonfatallyFailed) > 0;
 }
 
 int TestResult::total_part_count() const {
   return static_cast<int>(test_part_results_.size());
 }
 
-void TestResult::AddTestPartResult(const TestPartResult& test_part_result) {
-  test_part_results_.push_back(test_part_result);
+/************************************************
+ * end of TestResult
+ ************************************************/
+
+
+/************************************************
+ * Test
+ * member function implentation
+ ************************************************/
+Test::Test() {
 }
 
+Test::~Test() {
+}
+
+void Test::Run() {
+  // internal::UnitTestImpl* const impl = internal::GetUnitTestImpl();
+  TestBody();
+}
+
+bool Test::HasFatalFailure() {
+  return internal::GetUnitTestImpl()->current_test_result()->HasFatalFailure();
+}
+
+bool Test::HasNonfatalFalure() {
+  return internal::GetUnitTestImpl()->current_test_result()->
+      HasNonfatalFalure();
+}
+
+/************************************************
+ * end of Test
+ ************************************************/
+
+
+/************************************************
+ * TestInfo
+ * member function implentation
+ ************************************************/
 TestInfo::TestInfo(const std::string& test_case_name,
                    const std::string& name,
                    internal::CodeLocation a_code_location,
@@ -551,20 +606,56 @@ TestInfo::TestInfo(const std::string& test_case_name,
     : test_case_name_(test_case_name),
       name_(name),
       location_(a_code_location),
-      factory_(factory) {}
+      factory_(factory),
+      result_() {}
 
 TestInfo::~TestInfo() {
   delete factory_;
 }
 
+namespace internal {
+
+TestInfo* MakeAndRegisterTestInfo (
+    const char* test_case_name,
+    const char* name,
+    CodeLocation code_location,
+    TestFactoryBase* factory) {
+  TestInfo* const test_info =
+      new TestInfo(test_case_name, name, code_location, factory);
+  GetUnitTestImpl()->AddTestInfo(test_info);
+  return test_info;
+}
+
+void ReportInvalidTestCaseType(const char* test_case_name,
+                               CodeLocation code_location) {
+  Message errors;
+  errors
+      << "Attempted redefinition of test case " << test_case_name << ".\n"
+      << "All tests in the same test case must use the same test fixture\n"
+      << "class.  However, in test case " << test_case_name << ", you tried\n"
+      << "to define a test using a fixture class different from the one\n"
+      << "used earlier. This can happen if the two fixture classes are\n"
+      << "from different namespaces and have the same name. You should\n"
+      << "probably rename one of the classes to put the tests into different\n"
+      << "test cases.";
+
+  GTEST_LOG_(ERROR)
+       << FormatFileLocation(code_location.file.c_str(),
+                             code_location.line)
+       << " " << errors.GetString();
+}
+
+} // namespace internal
+
 void TestInfo::Run() {
-  UnitTest* unit_test = UnitTest::GetInstance();
-  unit_test->set_current_test_info(this);
-  TestEventListener* repeater = unit_test->listeners().repeater();
+  internal::UnitTestImpl* const impl = internal::GetUnitTestImpl();
+  // UnitTest* unit_test = UnitTest::GetInstance();
+  impl->set_current_test_info(this);
+  TestEventListener* repeater = UnitTest::GetInstance()->listeners().repeater();
 
   repeater->OnTestStart(*this);
 
-  Test* test = factory_->CreateTest();
+  Test* const test = factory_->CreateTest();
   if (test != NULL) {
     test->Run();
     delete test;
@@ -572,39 +663,18 @@ void TestInfo::Run() {
 
   repeater->OnTestEnd(*this);
 
-  unit_test->set_current_test_info(NULL);
+  impl->set_current_test_info(NULL);
 }
 
-TestCase::TestCase(const char *name)
-    : name_(name) {}
+/************************************************
+ * end of TestInfo
+ ************************************************/
 
-TestCase::~TestCase() {
-  for (auto it = test_info_list_.begin();
-       it != test_info_list_.end();
-       ++it) {
-    delete *it;
-  }
-  test_info_list_.clear();
-}
 
-void TestCase::AddTestInfo(TestInfo* test_info) {
-  test_info_list_.push_back(test_info);
-  test_indices_.push_back(static_cast<int>(test_indices_.size()));
-}
-
-void TestCase::Run() {
-  for (auto it = test_info_list_.begin();
-       it != test_info_list_.end();
-       ++it) {
-    (*it)->Run();
-  }
-}
-
-const TestInfo* TestCase::GetTestInfo(int i) const {
-  const int index = GetElementOr(test_indices_, i, -1);
-  return index < 0 ? NULL : test_info_list_[index];
-}
-
+/************************************************
+ * TestCase
+ * member function implentation
+ ************************************************/
 int TestCase::successful_test_count() const {
   return CountIf(test_info_list_, TestPassed);
 }
@@ -621,72 +691,112 @@ int TestCase::test_to_run_count() const {
   return CountIf(test_info_list_, ShouldRunTest);
 }
 
-UnitTest::UnitTest()
-    : default_global_test_part_result_reporter_(this),
-      global_test_part_result_reporter_(
-          &default_global_test_part_result_reporter_),
-      default_per_thread_test_part_result_reporter_(this),
-      per_thread_test_part_result_reporter_(
-          &default_per_thread_test_part_result_reporter_),
-      current_test_case_(NULL),
-      current_test_info_(NULL) {
-  listeners().SetDefaultResultPrinter(new
-    internal::PrettyUnitTestResultPrinter);
+TestCase::TestCase(const char *name)
+    : name_(name) {}
+
+TestCase::~TestCase() {
+  ForEach(test_info_list_, internal::Delete<TestInfo>);
 }
 
-UnitTest::~UnitTest() {
-  for (auto it = test_cases_.begin();
-       it != test_cases_.end();
-       ++it) {
-    delete *it;
+const TestInfo* TestCase::GetTestInfo(int i) const {
+  const int index = GetElementOr(test_indices_, i, -1);
+  return index < 0 ? NULL : test_info_list_[index];
+}
+
+TestInfo* TestCase::GetMutableTestInfo(int i) {
+  const int index = GetElementOr(test_indices_, i, -1);
+  return index < 0 ? NULL : test_info_list_[index];
+}
+
+void TestCase::AddTestInfo(TestInfo* test_info) {
+  test_info_list_.push_back(test_info);
+  test_indices_.push_back(static_cast<int>(test_indices_.size()));
+}
+
+void TestCase::Run() {
+  internal::UnitTestImpl* const impl = internal::GetUnitTestImpl();
+  impl->set_current_test_case(this);
+
+  TestEventListener* repeater = UnitTest::GetInstance()->listeners().repeater();
+
+  repeater->OnTestCaseStart(*this);
+
+  for (int i = 0; i < total_test_count(); ++i) {
+    GetMutableTestInfo(i)->Run();
   }
+
+  repeater->OnTestCaseEnd(*this);
+  impl->set_current_test_case(NULL);
 }
 
+void TestCase::ClearResult() {
+  ForEach(test_info_list_, TestInfo::ClearTestResult);
+}
+
+/************************************************
+ * end of TestCase
+ ************************************************/
+
+
+/************************************************
+ * UnitTest
+ * member function implentation
+ ************************************************/
 UnitTest* UnitTest::GetInstance() {
   static UnitTest instance;
   return &instance;
 }
 
-int UnitTest::Run() {
-  bool failed = false;
-  TestEventListener* repeater = listeners().repeater();
-  repeater->OnTestProgramStart(*this);
-
-  for (auto it = test_cases_.begin();
-       it != test_cases_.end();
-       ++it) {
-    (*it)->Run();
-  }
-
-  repeater->OnTestProgramEnd(*this);
-
-  if (!Passed()) {
-    failed = true;
-  }
-
-  return !failed;
+int UnitTest::successful_test_case_count() const {
+  return impl()->successful_test_case_count();
 }
 
-TestCase* UnitTest::GetTestCase(const char *test_case_name) {
-  auto it = test_cases_.begin();
-  for (; it != test_cases_.end(); ++it) {
-    if (0 == strcmp((*it)->name(), test_case_name)) {
-      break;
-    }
-  }
-
-  if (it != test_cases_.end()) {
-    return *it;
-  } else {
-    TestCase* test_case = new TestCase(test_case_name);
-    test_cases_.push_back(test_case);
-    test_case_indices_.push_back(static_cast<int>(test_case_indices_.size()));
-    return test_case;
-  }
+int UnitTest::failed_test_case_count() const {
+  return impl()->failed_test_case_count();
 }
 
-void UnitTest::AddTestInfo(TestInfo* test_info) {
-  GetTestCase(test_info->test_case_name())->AddTestInfo(test_info);
+int UnitTest::successful_test_count() const {
+  return impl()->successful_test_count();
+}
+
+int UnitTest::failed_test_count() const {
+  return impl()->failed_test_count();
+}
+
+int UnitTest::total_test_case_count() const {
+  return impl()->total_test_case_count();
+}
+
+int UnitTest::test_case_to_run_count() const {
+  return impl()->test_case_to_run_count();
+}
+
+int UnitTest::total_test_count() const {
+  return impl()->total_test_count();
+}
+
+int UnitTest::test_to_run_count() const {
+  return impl()->test_to_run_count();
+}
+
+bool UnitTest::Passed() const {
+  return impl()->Passed();
+}
+
+bool UnitTest::Failed() const {
+  return impl()->Failed();
+}
+
+const TestCase* UnitTest::GetTestCase(int i) const {
+  return impl()->GetTestCase(i);
+}
+
+TestCase* UnitTest::GetMutableTestCase(int i) {
+  return impl()->GetMutableTestCase(i);
+}
+
+TestEventListeners& UnitTest::listeners() {
+  return *impl()->listeners();
 }
 
 void UnitTest::AddTestPartResult(
@@ -697,72 +807,180 @@ void UnitTest::AddTestPartResult(
   Message msg;
   msg << message;
 
-  // std::cout << "[" << message << "]" << std::endl;
   internal::MutexLock lock(&mutex_);
-  // if ()
   const TestPartResult result = 
     TestPartResult(result_type, file_name, line_number,
                    msg.GetString().c_str());
 
-  GetTestPartResultReporterForCurrentThread()->
+  impl_->GetTestPartResultReporterForCurrentThread()->
       ReportTestPartResult(result);
+}
 
-  // if (result_type != TestPartResult::kSuccess) {
+int UnitTest::Run() {
+  // bool failed = false;
+  // TestEventListener* repeater = listeners().repeater();
+  // repeater->OnTestProgramStart(*this);
 
+  // for (auto it = test_cases_.begin();
+  //      it != test_cases_.end();
+  //      ++it) {
+  //   (*it)->Run();
   // }
+
+  // repeater->OnTestProgramEnd(*this);
+
+  // if (!Passed()) {
+  //   failed = true;
+  // }
+
+  // return !failed;
+  return impl()->RunAllTests();
 }
 
-int UnitTest::successful_test_count() const {
-  return SumOverTestCaseList(test_cases_, &TestCase::successful_test_count);
+const TestCase* UnitTest::current_test_case() const {
+  internal::MutexLock lock(&mutex_);
+  return impl_->current_test_case();
 }
 
-int UnitTest::failed_test_count() const {
-  return SumOverTestCaseList(test_cases_, &TestCase::failed_test_count);
+const TestInfo* UnitTest::current_test_info() const {
+  internal::MutexLock lock(&mutex_);
+  return impl_->current_test_info();
 }
 
-int UnitTest::failed_test_case_count() const {
+UnitTest::UnitTest() {
+  impl_ = new internal::UnitTestImpl(this);
+}
+
+UnitTest::~UnitTest() {
+  delete impl_;
+}
+
+/************************************************
+ * end of UnitTest
+ ************************************************/
+
+
+namespace internal {
+
+
+/************************************************
+ * UnitTestImpl
+ * member function implentation
+ ************************************************/
+UnitTestImpl::UnitTestImpl(UnitTest* parent)
+    : parent_(parent),
+      default_global_test_part_result_reporter_(this),
+      default_per_thread_test_part_result_reporter_(this),
+      global_test_part_result_repoter_(
+          &default_global_test_part_result_reporter_),
+      per_thread_test_part_result_reporter_(
+          &default_per_thread_test_part_result_reporter_),
+      current_test_case_(NULL),
+      current_test_info_(NULL) {
+  listeners()->SetDefaultResultPrinter(new PrettyUnitTestResultPrinter);
+}
+
+UnitTestImpl::~UnitTestImpl() {
+  ForEach(test_cases_, internal::Delete<TestCase>);
+}
+
+TestCase* UnitTestImpl::GetTestCase(const char* test_case_name) {
+  const std::vector<TestCase*>::const_iterator test_case =
+      std::find_if(test_cases_.begin(), test_cases_.end(),
+                   [test_case_name](TestCase* test_case) {
+                     return test_case != NULL && strcmp(test_case->name(),
+                                                        test_case_name);
+                   });
+
+  if (test_case != test_cases_.end())
+    return *test_case;
+
+  TestCase* const new_test_case =
+      new TestCase(test_case_name);
+
+  test_cases_.push_back(new_test_case);
+  test_case_indices_.push_back(static_cast<int>(test_case_indices_.size()));
+  return new_test_case;
+}
+
+bool UnitTestImpl::RunAllTests() {
+  bool failed = false;
+  TestEventListener* repeater = listeners()->repeater();
+
+  repeater->OnTestProgramStart(*parent_);
+
+  for (int test_index = 0; test_index < total_test_case_count(); ++test_index) {
+    GetMutableTestCase(test_index)->Run();
+  }
+
+  repeater->OnTestProgramEnd(*parent_);
+
+  if (!Passed()) {
+    failed = true;
+  }
+
+  return !failed;
+}
+
+TestPartResultReporterInterface*
+UnitTestImpl::GetGlobalTestPartResultReporter() {
+  internal::MutexLock lock(&global_test_part_result_reporter_mutex_);
+  return global_test_part_result_repoter_;
+}
+
+void UnitTestImpl::SetGlobalTestPartResultReporter(
+    TestPartResultReporterInterface* reporter) {
+  internal::MutexLock lock(&global_test_part_result_reporter_mutex_);
+  global_test_part_result_repoter_ = reporter;
+}
+
+TestPartResultReporterInterface*
+UnitTestImpl::GetTestPartResultReporterForCurrentThread() {
+  return per_thread_test_part_result_reporter_.get();
+}
+
+void UnitTestImpl::SetTestPartResultReporterForCurrentThread(
+    TestPartResultReporterInterface* reporter) {
+  per_thread_test_part_result_reporter_.set(reporter);
+}
+
+int UnitTestImpl::successful_test_case_count() const {
+  return CountIf(test_cases_, TestCasePassed);
+}
+
+int UnitTestImpl::failed_test_case_count() const {
   return CountIf(test_cases_, TestCaseFailed);
 }
 
-int UnitTest::total_test_case_count() const {
+int UnitTestImpl::total_test_case_count() const {
   return static_cast<int>(test_cases_.size());
 }
 
-int UnitTest::test_case_to_run_count() const {
+int UnitTestImpl::test_case_to_run_count() const {
   return CountIf(test_cases_, ShouldRunTestCase);
 }
 
-int UnitTest::test_to_run_count() const {
+int UnitTestImpl::successful_test_count() const {
+  return SumOverTestCaseList(test_cases_, &TestCase::successful_test_count);
+}
+
+int UnitTestImpl::failed_test_count() const {
+  return SumOverTestCaseList(test_cases_, &TestCase::failed_test_count);
+}
+
+int UnitTestImpl::total_test_count() const {
+  return SumOverTestCaseList(test_cases_, &TestCase::total_test_count);
+}
+
+int UnitTestImpl::test_to_run_count() const {
   return SumOverTestCaseList(test_cases_, &TestCase::test_to_run_count);
 }
 
-const TestCase* UnitTest::GetTestCase(int i) const {
-  const int index = GetElementOr(test_case_indices_, i, -1);
-  return index < 0 ? NULL : test_cases_[i];
-}
-
-bool UnitTest::Passed() const {
-  return !Failed();
-}
-
-bool UnitTest::Failed() const {
-  return failed_test_case_count() > 0;
-}
-
-TestResult* UnitTest::current_test_result() {
+TestResult* UnitTestImpl::current_test_result() {
   return current_test_info_ ? &(current_test_info_->result_) : NULL;
 }
+} // namespace internal
 
-TestPartResultReporterInterface*
-UnitTest::GetGlobalTestPartResultReporter() {
-  internal::MutexLock lock(&global_test_part_result_reporter_mutex_);
-  return global_test_part_result_reporter_;
-}
-
-TestPartResultReporterInterface*
-UnitTest::GetTestPartResultReporterForCurrentThread() {
-  return per_thread_test_part_result_reporter_.get();
-}
 
 void InitGoogleTest(int* argc, char** argv) {}
 
@@ -778,16 +996,7 @@ std::string AppendUserMessage(const std::string& gtest_msg,
   return gtest_msg + "\n" + user_msg_string;
 }
 
-TestInfo* MakeAndRegisterTestInfo (
-    const char* test_case_name,
-    const char* name,
-    CodeLocation code_location,
-    TestFactoryBase* factory) {
-  TestInfo* const test_info =
-      new TestInfo(test_case_name, name, code_location, factory);
-  GetUnitTest()->AddTestInfo(test_info);
-  return test_info;
-}
+
 
 bool IsTrue(bool condition) { return condition; }
 

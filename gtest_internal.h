@@ -15,6 +15,7 @@ class AssertionResult;
 class Test;
 class TestInfo;
 class UnitTest;
+class TestCase;
 
 template <typename T>
 ::std::string PrintToString(const T& value);
@@ -51,10 +52,7 @@ void ForEach(const Container& c, Functor functor) {
   std::for_each(c.begin(), c.end(), functor);
 }
 
-template <typename T>
-inline T GetElementOr(const std::vector<T>& v, int i, T default_value) {
-  return (i < 0 || i >= static_cast<int>(v.size())) ? default_value : v[i];
-}
+
 
 template <typename T>
 static void Delete(T* x) {
@@ -165,31 +163,20 @@ TestInfo* MakeAndRegisterTestInfo (
       CodeLocation code_location,
       TestFactoryBase* factory);
 
-class DefaultPerThreadTestPartResultReporter
-    : public TestPartResultReporterInterface {
- public:
-  explicit DefaultPerThreadTestPartResultReporter(UnitTest* unit_test);
 
-  virtual void ReportTestPartResult(const TestPartResult& result);
 
- private:
-  UnitTest* const unit_test_;
 
-  GTEST_DISALLOW_COPY_AND_ASSIGN_(DefaultPerThreadTestPartResultReporter);
-};
 
-class DefaultGlobalTestPartResultReporter
-  : public TestPartResultReporterInterface {
- public:
-  explicit DefaultGlobalTestPartResultReporter(UnitTest* unit_test);
 
-  virtual void ReportTestPartResult(const TestPartResult& result);
 
- private:
-  UnitTest* const unit_test_;
 
-  GTEST_DISALLOW_COPY_AND_ASSIGN_(DefaultGlobalTestPartResultReporter);
-};
+/************************************************
+ * Random
+ ************************************************/
+class GTEST_API_ Random;
+
+
+
 
 } // namespace internal
 } // namespace testing
